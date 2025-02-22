@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)]
+
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 
@@ -12,7 +14,8 @@ pub mod escrow {
         let escrow_account = &mut ctx.accounts.escrow_account;
         escrow_account.owner = *ctx.accounts.user.key;
         escrow_account.amount += amount;
-        
+        escrow_account.mint = ctx.accounts.user_token_account.mint; // Store the mint
+
         let cpi_accounts = Transfer {
             from: ctx.accounts.user_token_account.to_account_info(),
             to: ctx.accounts.escrow_token_account.to_account_info(),
@@ -27,12 +30,18 @@ pub mod escrow {
     pub fn withdraw(ctx: Context<Withdraw>) -> Result<()> {
         let amount = ctx.accounts.escrow_account.amount;
         ctx.accounts.escrow_account.amount = 0;
-    
+
         // Get PDA Seeds & Bump
         let bump = ctx.bumps.escrow_account;
-        let seeds = &[b"escrow".as_ref(), ctx.accounts.escrow_account.owner.as_ref(), &[bump]];
+        let mint_key = ctx.accounts.escrow_account.mint;
+        let seeds = &[
+            b"escrow".as_ref(),
+            ctx.accounts.escrow_account.owner.as_ref(),
+            mint_key.as_ref(),
+            &[bump],
+        ];
         let signer_seeds = &[&seeds[..]];
-    
+
         let cpi_accounts = Transfer {
             from: ctx.accounts.escrow_token_account.to_account_info(),
             to: ctx.accounts.user_token_account.to_account_info(),
@@ -40,14 +49,10 @@ pub mod escrow {
         };
         let cpi_program = ctx.accounts.token_program.to_account_info();
         token::transfer(
-            CpiContext::new_with_signer(
-                cpi_program,
-                cpi_accounts,
-                signer_seeds
-            ),
-            amount
+            CpiContext::new_with_signer(cpi_program, cpi_accounts, signer_seeds),
+            amount,
         )?;
-    
+
         Ok(())
     }
 }
@@ -61,17 +66,17 @@ pub struct Deposit<'info> {
         constraint = user_token_account.owner == user.key(),
         constraint = escrow_token_account.mint == user_token_account.mint
     )]
-    pub user_token_account: Account<'info, TokenAccount>, // Change from Box<Account<...>> to Account<...>
+    pub user_token_account: Account<'info, TokenAccount>,
     #[account(
         mut,
         constraint = escrow_token_account.owner == escrow_account.key()
     )]
-    pub escrow_token_account: Account<'info, TokenAccount>, // Change from Box<Account<...>> to Account<...>
+    pub escrow_token_account: Account<'info, TokenAccount>,
     #[account(
         init_if_needed,
-        payer = user, 
-        space = 8 + 40,
-        seeds = [b"escrow".as_ref(), user.key().as_ref()], 
+        payer = user,
+        space = 8 + 40 + 32, // Increased space for mint Pubkey
+        seeds = [b"escrow".as_ref(), user.key().as_ref(), user_token_account.mint.as_ref()],
         bump
     )]
     pub escrow_account: Account<'info, EscrowAccount>,
@@ -83,14 +88,20 @@ pub struct Deposit<'info> {
 pub struct Withdraw<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
+    #[account(
+        mut,
+        constraint = user_token_account.owner == user.key(),
+        constraint = escrow_token_account.mint == user_token_account.mint
+    )]
+    pub user_token_account: Account<'info, TokenAccount>,
     #[account(mut)]
-    pub user_token_account: Account<'info, TokenAccount>, // Change from Box<Account<...>> to Account<...>
-    #[account(mut)]
-    pub escrow_token_account: Account<'info, TokenAccount>, // Change from Box<Account<...>> to Account<...>
+    pub escrow_token_account: Account<'info, TokenAccount>,
     #[account(
         mut,
         constraint = escrow_account.owner == user.key(),
-        seeds = [b"escrow".as_ref(), escrow_account.owner.as_ref()],
+        constraint = escrow_token_account.owner == escrow_account.key(),
+        constraint = escrow_account.mint == user_token_account.mint,
+        seeds = [b"escrow".as_ref(), escrow_account.owner.as_ref(), escrow_account.mint.as_ref()],
         bump,
         close = user
     )]
@@ -100,8 +111,9 @@ pub struct Withdraw<'info> {
 
 #[account]
 pub struct EscrowAccount {
-    pub owner: Pubkey,
-    pub amount: u64,
+    pub owner: Pubkey, // 32 bytes
+    pub amount: u64,   // 8 bytes
+    pub mint: Pubkey,  // 32 bytes (new field to track token mint)
 }
 
 #[error_code]
