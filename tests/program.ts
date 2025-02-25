@@ -17,13 +17,13 @@ describe('escrow', () => {
   anchor.setProvider(provider);
   const program = anchor.workspace.Escrow as Program<Escrow>;
   
-  const payer = provider.wallet.payer;
+  const payer = provider.wallet as anchor.Wallet;
 
   // Helper function to set up a fresh escrow scenario
   async function setupEscrow(user: Keypair, initialMintAmount: number = 1000) {
     const mint = await createMint(
       provider.connection,
-      payer,
+      payer.payer,
       payer.publicKey,
       null,
       0
@@ -31,7 +31,7 @@ describe('escrow', () => {
 
     const userTokenAccount = (await getOrCreateAssociatedTokenAccount(
       provider.connection,
-      payer,
+      payer.payer,
       mint,
       user.publicKey
     )).address;
@@ -43,7 +43,7 @@ describe('escrow', () => {
 
     const escrowTokenAccount = (await getOrCreateAssociatedTokenAccount(
       provider.connection,
-      payer,
+      payer.payer,
       mint,
       escrowAccount,
       true
@@ -51,7 +51,7 @@ describe('escrow', () => {
 
     await mintTo(
       provider.connection,
-      payer,
+      payer.payer,
       mint,
       userTokenAccount,
       payer.publicKey,
